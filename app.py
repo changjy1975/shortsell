@@ -54,7 +54,7 @@ def analyze_stock(ticker, df):
 
         # --- 基礎濾網 ---
         # 1. 流動性濾網 (成交量 > 2000張，確保當沖進出容易)
-        if curr['Volume'] < 2000000: return None 
+        if curr['Volume'] < 1000000: return None 
         # 2. 價格濾網 (股價 > 20元)
         if curr['Close'] < 20: return None
 
