@@ -7,7 +7,7 @@ import time
 
 # --- 1. 基礎設定與環境優化 ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="台股極速選股器", layout="wide")
+st.set_page_config(page_title="台股放空極速選股器", layout="wide")
 
 @st.cache_data(ttl=86400)
 def get_listed_tickers():
