@@ -11,7 +11,7 @@ st.set_page_config(page_title="台股極速多空選股器", layout="wide")
 
 @st.cache_data(ttl=86400)
 def get_stock_tickers(market_type):
-    """抓取清單"""
+    """抓取股票清單"""
     url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2" if market_type == "上市" else "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
     suffix = ".TW" if market_type == "上市" else ".TWO"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -28,7 +28,7 @@ def get_stock_tickers(market_type):
         return []
 
 def analyze_stock(ticker, df, mode="空方"):
-    """核心策略：回傳所有評分大於 0 的結果，交由 UI 篩選"""
+    """策略核心邏輯"""
     try:
         if not isinstance(df, pd.DataFrame) or 'Close' not in df.columns: return None
         data = df.dropna()
@@ -53,7 +53,6 @@ def analyze_stock(ticker, df, mode="空方"):
             if bias < -0.05: score += 2; reasons.append("跌深反彈")
             if curr['Close'] > prev['Close'] and curr['Volume'] > vol_ma5: score += 1; reasons.append("量增漲")
             
-        # 只要有一項訊號就回傳，不再硬編碼 3 分
         if score > 0:
             return {
                 "代號": ticker, 
@@ -70,26 +69,29 @@ def analyze_stock(ticker, df, mode="空方"):
 st.sidebar.title("⚙️ 參數設定")
 market_choice = st.sidebar.selectbox("1. 市場類型", ["上市", "上櫃"])
 trade_mode = st.sidebar.radio("2. 交易方向", ["空方當沖 (Short)", "多方當沖 (Long)"])
-
-# 這裡的變數 min_score 將會與結果連動
-min_score = st.sidebar.slider("3. 評分門檻 (即時過濾結果)", 1, 5, 3)
+min_score = st.sidebar.slider("3. 評分門檻", 1, 5, 3)
 
 VOL_THRESHOLD = 3000000 
 
 # --- 3. UI 呈現 ---
-st.title(f"🚀 台股極速雙向選股器 ({market_choice})")
+st.title(f"🚀 台股極速多空選股器 ({market_choice})")
 st.warning(f"當前模式：{trade_mode[:2]} / 門檻：>= {min_score} 分 / 成交量 > 3000 張")
 
 if st.button(f"🔍 開始{market_choice}股票掃描"):
-    with st.spinner(f"正在掃描市場中..."):
+    # 使用 st.status 代替 st.spinner 以解決 Python 3.13 的 RuntimeError
+    with st.status(f"正在掃描 {market_choice} 市場...", expanded=True) as status:
         all_tickers = get_stock_tickers(market_choice)
-        if not all_tickers: st.stop()
+        if not all_tickers: 
+            status.update(label="清單抓取失敗", state="error")
+            st.stop()
         
-        status_msg = st.empty()
-        status_msg.info(f"第一階段：流動性過濾中...")
-        
-        fast_data = yf.download(all_tickers, period="3d", group_by='ticker', progress=False, threads=True)
-        
+        status.write("第一階段：流動性初步篩選中...")
+        try:
+            fast_data = yf.download(all_tickers, period="3d", group_by='ticker', progress=False, threads=True)
+        except Exception as e:
+            status.update(label=f"下載數據失敗: {e}", state="error")
+            st.stop()
+
         qualified_tickers = []
         for t in all_tickers:
             try:
@@ -103,41 +105,42 @@ if st.button(f"🔍 開始{market_choice}股票掃描"):
                     qualified_tickers.append(t)
             except: continue
         
-        status_msg.success(f"✅ 第一階段完成！篩選出 {len(qualified_tickers)} 隻高流動性標的。")
+        status.write(f"✅ 第一階段完成！篩選出 {len(qualified_tickers)} 隻標的。")
         
-        # 第二階段深度分析
         results = []
         if qualified_tickers:
+            status.write("第二階段：深度技術指標分析中...")
             detail_data = yf.download(qualified_tickers, period="1mo", group_by='ticker', progress=False, threads=True)
-            progress_bar = st.progress(0)
             
+            progress_bar = st.progress(0)
             for i, t in enumerate(qualified_tickers):
                 df_to_analyze = detail_data[t] if len(qualified_tickers) > 1 else detail_data
                 res = analyze_stock(t, df_to_analyze, mode=trade_mode[:2])
-                
-                # --- 關鍵連線修正：根據 Sidebar 的 min_score 進行篩選 ---
                 if res and res['評分'] >= min_score:
                     results.append(res)
                 progress_bar.progress((i + 1) / len(qualified_tickers))
             
-            status_msg.empty()
+            status.update(label="✅ 掃描完成！", state="complete", expanded=False)
+            
             if results:
                 final_df = pd.DataFrame(results).sort_values(by="評分", ascending=False)
                 st.success(f"🔥 符合 {min_score} 分以上標的：")
                 st.dataframe(final_df, use_container_width=True)
                 
+                # 策略說明區塊
                 st.markdown("---")
                 st.subheader("📊 策略評分權重說明")
                 col_l, col_r = st.columns(2)
                 with col_l:
                     st.write("**空方 (Short)**")
-                    st.markdown("- 跌破5MA (+1)\n- 收黑K (+1)\n- 高正乖離 (>5%) (+2)\n- 量增跌 (+1)")
+                    st.markdown("- 跌破5MA (+1)\n- 收黑K (+1)\n- 高正乖離 (>5%) (+2)\n- 量增下跌 (+1)")
                 with col_r:
                     st.write("**多方 (Long)**")
-                    st.markdown("- 突破5MA (+1)\n- 收紅K (+1)\n- 高負乖離 (<-5%) (+2)\n- 量增漲 (+1)")
+                    st.markdown("- 突破5MA (+1)\n- 收紅K (+1)\n- 高負乖離 (<-5%) (+2)\n- 量增上漲 (+1)")
             else:
-                st.warning(f"目前的門檻設定為 {min_score} 分，市場中沒有符合該強度的標的。")
+                st.warning(f"當前門檻 {min_score} 分下無符合標的。")
         else:
+            status.update(label="分析結束：流動性不足", state="error")
             st.error("掃描結束，今日市場流動性不足 3000 張。")
 
-st.caption("數據來源：Yahoo Finance | 兩階段加速過濾技術")
+st.caption("數據來源：Yahoo Finance | 使用 Python 3.13 穩定版組件")
